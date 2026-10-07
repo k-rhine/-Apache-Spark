@@ -1,0 +1,79 @@
+name: spark-demo
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: demo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: >
+      postgres
+      -c shared_buffers=1GB
+      -c effective_cache_size=3GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=1GB
+      -c max_wal_size=8GB
+      -c max_connections=200
+      -c max_parallel_workers_per_gather=2
+    ports:
+      - "5432:5432"
+    shm_size: 1g
+    mem_limit: 2500m
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 30
+
+  jupyter:
+    build: ./jupyter
+    image: spark-demo-jupyter:latest
+    container_name: demo-jupyter
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+    command: >
+      jupyter lab
+      --ip=0.0.0.0 --port=8888 --no-browser
+      --ServerApp.token=${JUPYTER_TOKEN}
+      --ServerApp.allow_remote_access=True
+      --ServerApp.allow_origin=*
+      --ServerApp.root_dir=/home/jovyan/work
+    ports:
+      - "8888:8888"
+      - "4040-4045:4040-4045"   # Spark UI (4041+ — если открыто несколько сессий)
+    mem_limit: 8500m
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - spark-events:/home/jovyan/spark-events
+
+  history:
+    image: spark-demo-jupyter:latest
+    container_name: demo-spark-history
+    restart: unless-stopped
+    depends_on: [jupyter]
+    environment:
+      SPARK_HISTORY_OPTS: >-
+        -Dspark.history.fs.logDirectory=file:/home/jovyan/spark-events
+        -Dspark.history.fs.update.interval=5s
+        -Dspark.history.ui.port=18080
+    command: ["spark-class", "org.apache.spark.deploy.history.HistoryServer"]
+    ports:
+      - "18080:18080"
+    mem_limit: 1g
+    volumes:
+      - spark-events:/home/jovyan/spark-events
+
+volumes:
+  pgdata:
+  spark-events:
